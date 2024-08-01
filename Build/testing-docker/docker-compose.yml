@@ -84,16 +84,16 @@ services:
         mkdir -p .Build/Web/typo3temp/var/tests/
         if [ ${PHP_XDEBUG_ON} -eq 0 ]; then
           XDEBUG_MODE=\"off\" \
-          .Build/vendor/codeception/codeception/codecept run Backend -c Tests/codeception.yml ${TEST_FILE} ${EXTRA_TEST_OPTIONS} \
-          || .Build/vendor/codeception/codeception/codecept run Backend -c Tests/codeception.yml ${TEST_FILE} ${EXTRA_TEST_OPTIONS} \
+          .Build/vendor/codeception/codeception/codecept run Backend -c Tests/codeception.yml ${TEST_FILE} ${EXTRA_TEST_OPTIONS} \\
+          || .Build/vendor/codeception/codeception/codecept run Backend -c Tests/codeception.yml ${TEST_FILE} ${EXTRA_TEST_OPTIONS} \\
           || .Build/vendor/codeception/codeception/codecept run Backend -c Tests/codeception.yml ${TEST_FILE} ${EXTRA_TEST_OPTIONS}
         else
           DOCKER_HOST=`route -n | awk '/^0.0.0.0/ { print $$2 }'`
           XDEBUG_MODE=\"debug,develop\" \
           XDEBUG_TRIGGER=\"foo\" \
           XDEBUG_CONFIG=\"client_port=${PHP_XDEBUG_PORT} client_host=$${DOCKER_HOST}\" \
-          .Build/vendor/codeception/codeception/codecept run Backend -c Tests/codeception.yml ${TEST_FILE} ${EXTRA_TEST_OPTIONS} \
-          || .Build/vendor/codeception/codeception/codecept run Backend -c Tests/codeception.yml ${TEST_FILE} ${EXTRA_TEST_OPTIONS} \
+          .Build/vendor/codeception/codeception/codecept run Backend -c Tests/codeception.yml ${TEST_FILE} ${EXTRA_TEST_OPTIONS} \\
+          || .Build/vendor/codeception/codeception/codecept run Backend -c Tests/codeception.yml ${TEST_FILE} ${EXTRA_TEST_OPTIONS} \\
           || .Build/vendor/codeception/codeception/codecept run Backend -c Tests/codeception.yml ${TEST_FILE} ${EXTRA_TEST_OPTIONS}
         fi
       "
@@ -109,7 +109,7 @@ services:
         if [ ${SCRIPT_VERBOSE} -eq 1 ]; then
           set -x
         fi
-        php -dxdebug.mode=off .Build/vendor/friendsofphp/php-cs-fixer/php-cs-fixer fix -v ${CGLCHECK_DRY_RUN} \
+        php -dxdebug.mode=off .Build/vendor/friendsofphp/php-cs-fixer/php-cs-fixer fix -v ${CGLCHECK_DRY_RUN} \\
           --config=Build/php-cs-fixer.php --using-cache=no
       "
 
