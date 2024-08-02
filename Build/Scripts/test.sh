@@ -316,6 +316,8 @@ EXTRA_TEST_OPTIONS=""
 CGLCHECK_DRY_RUN=0
 DATABASE_DRIVER=""
 CONTAINER_BIN=""
+CHUNKS=0
+THISCHUNK=0
 COMPOSER_ROOT_VERSION="12.0.0-dev"
 CONTAINER_INTERACTIVE="-it --init"
 HOST_UID=$(id -u)
@@ -327,6 +329,7 @@ CI_PARAMS="${CI_PARAMS:-}"
 CONTAINER_HOST="host.docker.internal"
 PHPSTAN_CONFIG_FILE="phpstan.neon"
 IS_CI=0
+ACCEPTANCE_HEADLESS=1
 
 # Option parsing updates above default vars
 # Reset in case getopts has been used previously in the shell
@@ -437,12 +440,14 @@ fi
 mkdir -p .cache
 mkdir -p .Build/public/typo3temp/var/tests
 
+IMAGE_APACHE="ghcr.io/typo3/core-testing-apache24:1.5"
 IMAGE_PHP="ghcr.io/typo3/core-testing-$(echo "php${PHP_VERSION}" | sed -e 's/\.//'):latest"
 IMAGE_ALPINE="docker.io/alpine:3.8"
 IMAGE_DOCS="ghcr.io/typo3-documentation/render-guides:latest"
 IMAGE_MARIADB="docker.io/mariadb:${DBMS_VERSION}"
 IMAGE_MYSQL="docker.io/mysql:${DBMS_VERSION}"
 IMAGE_POSTGRES="docker.io/postgres:${DBMS_VERSION}-alpine"
+IMAGE_SELENIUM="docker.io/selenium/standalone-chrome:4.11.0-20230801"
 
 # Set $1 to first mass argument, this is the optional test file or test directory to execute
 shift $((OPTIND - 1))
@@ -460,10 +465,13 @@ fi
 if [ ${PHP_XDEBUG_ON} -eq 0 ]; then
     XDEBUG_MODE="-e XDEBUG_MODE=off"
     XDEBUG_CONFIG=" "
+    PHP_FPM_OPTIONS="-d xdebug.mode=off"
 else
     XDEBUG_MODE="-e XDEBUG_MODE=debug -e XDEBUG_TRIGGER=foo"
     XDEBUG_CONFIG="client_port=${PHP_XDEBUG_PORT} client_host=host.docker.internal"
+    PHP_FPM_OPTIONS="-d xdebug.mode=debug -d xdebug.start_with_request=yes -d xdebug.client_host=${CONTAINER_HOST} -d xdebug.client_port=${PHP_XDEBUG_PORT} -d memory_limit=256M"
 fi
+
 
 # Suite execution
 case ${TEST_SUITE} in
@@ -547,6 +555,77 @@ case ${TEST_SUITE} in
         ${CONTAINER_BIN} run ${CONTAINER_COMMON_PARAMS} --name composer-coverals-${SUFFIX} -e XDEBUG_MODE=coverage -e XDEBUG_TRIGGER=foo -e XDEBUG_CONFIG="${XDEBUG_CONFIG}" -e COMPOSER_CACHE_DIR=.cache/composer -e COMPOSER_ROOT_VERSION=${COMPOSER_ROOT_VERSION} ${IMAGE_PHP} "${COMMAND[@]}"
         SUITE_EXIT_CODE=$?
         ;;
+          acceptance)
+              WEB_DIR=$ROOT_DIR/.Build/Web/
+              #CODECEPION_ENV="--env ci,classic"
+              #if [ "${ACCEPTANCE_HEADLESS}" -eq 1 ]; then
+              #    CODECEPION_ENV="--env ci,classic,headless"
+              #fi
+              CODECEPION_ENV=""
+              if [ "${CHUNKS}" -gt 0 ]; then
+                  ${CONTAINER_BIN} run ${CONTAINER_COMMON_PARAMS} --name ac-splitter-${SUFFIX} ${IMAGE_PHP} php -dxdebug.mode=off Build/Scripts/splitAcceptanceTests.php -v ${CHUNKS}
+                  COMMAND=(.Build/bin/codecept run Backend -d -g AcceptanceTests-Job-${THISCHUNK} -c Tests/codeception.yml ${CODECEPION_ENV} "$@" --html reports.html)
+              else
+                  COMMAND=(.Build/bin/codecept run Backend -d -c Tests/codeception.yml ${CODECEPION_ENV} "$@" --html reports.html --fail-fast --skip-group=content_defender)
+              fi
+              SELENIUM_GRID=""
+              if [ "${ACCEPTANCE_HEADLESS}" -eq 0 ]; then
+                  SELENIUM_GRID="-p 7900:7900 -e SE_VNC_NO_PASSWORD=1 -e VNC_NO_PASSWORD=1"
+              fi
+              rm -rf "${WEB_DIR}/typo3temp/var/tests/acceptance" "${WEB_DIR}/typo3temp/var/tests/AcceptanceReports"
+              mkdir -p "${WEB_DIR}/typo3temp/var/tests/acceptance"
+              APACHE_OPTIONS="-e APACHE_RUN_USER=#${HOST_UID} -e APACHE_RUN_SERVERNAME=web -e APACHE_RUN_GROUP=#${HOST_PID} -e APACHE_RUN_DOCROOT=${WEB_DIR}/typo3temp/var/tests/acceptance -e PHPFPM_HOST=phpfpm -e PHPFPM_PORT=9000"
+              ${CONTAINER_BIN} run --rm ${CI_PARAMS} -d ${SELENIUM_GRID} --name ac-chrome-${SUFFIX} --network ${NETWORK} --network-alias chrome --tmpfs /dev/shm:rw,nosuid,nodev,noexec ${IMAGE_SELENIUM} >/dev/null
+              if [ ${CONTAINER_BIN} = "docker" ]; then
+                  ${CONTAINER_BIN} run --rm -d --name ac-phpfpm-${SUFFIX} --network ${NETWORK} --network-alias phpfpm --add-host "${CONTAINER_HOST}:host-gateway" ${USERSET} -e PHPFPM_USER=${HOST_UID} -e PHPFPM_GROUP=${HOST_PID} -v ${ROOT_DIR}:${ROOT_DIR} ${IMAGE_PHP} php-fpm ${PHP_FPM_OPTIONS} >/dev/null
+                  ${CONTAINER_BIN} run --rm -d --name ac-web-${SUFFIX} --network ${NETWORK} --network-alias web --add-host "${CONTAINER_HOST}:host-gateway" -v ${ROOT_DIR}:${ROOT_DIR} ${APACHE_OPTIONS} ${IMAGE_APACHE} >/dev/null
+              else
+                  ${CONTAINER_BIN} run --rm ${CI_PARAMS} -d --name ac-phpfpm-${SUFFIX} --network ${NETWORK} --network-alias phpfpm ${USERSET} -e PHPFPM_USER=0 -e PHPFPM_GROUP=0 -v ${ROOT_DIR}:${ROOT_DIR} ${IMAGE_PHP} php-fpm -R ${PHP_FPM_OPTIONS} >/dev/null
+                  ${CONTAINER_BIN} run --rm ${CI_PARAMS} -d --name ac-web-${SUFFIX} --network ${NETWORK} --network-alias web -v ${ROOT_DIR}:${ROOT_DIR} ${APACHE_OPTIONS} ${IMAGE_APACHE} >/dev/null
+              fi
+
+              waitFor chrome 4444
+              if [ "${ACCEPTANCE_HEADLESS}" -eq 0 ]; then
+                  waitFor chrome 7900
+              fi
+              waitFor web 80
+              if [ "${ACCEPTANCE_HEADLESS}" -eq 0 ] && type "xdg-open" >/dev/null; then
+                  xdg-open http://localhost:7900/?autoconnect=1 >/dev/null
+              elif [ "${ACCEPTANCE_HEADLESS}" -eq 0 ] && type "open" >/dev/null; then
+                  open http://localhost:7900/?autoconnect=1 >/dev/null
+              fi
+              case ${DBMS} in
+                  mariadb)
+                      ${CONTAINER_BIN} run --rm ${CI_PARAMS} --name mariadb-ac-${SUFFIX} --network ${NETWORK} -d -e MYSQL_ROOT_PASSWORD=funcp --tmpfs /var/lib/mysql/:rw,noexec,nosuid ${IMAGE_MARIADB} >/dev/null
+                      waitFor mariadb-ac-${SUFFIX} 3306
+                      CONTAINERPARAMS="-e typo3DatabaseName=func_test -e typo3DatabaseUsername=root -e typo3DatabasePassword=funcp -e typo3DatabaseHost=mariadb-ac-${SUFFIX}"
+                      ${CONTAINER_BIN} run ${CONTAINER_COMMON_PARAMS} --name ac-mariadb ${XDEBUG_MODE} -e XDEBUG_CONFIG="${XDEBUG_CONFIG}" ${CONTAINERPARAMS} ${IMAGE_PHP} "${COMMAND[@]}"
+                      SUITE_EXIT_CODE=$?
+                      ;;
+                  mysql)
+                      ${CONTAINER_BIN} run --rm ${CI_PARAMS} --name mysql-ac-${SUFFIX} --network ${NETWORK} -d -e MYSQL_ROOT_PASSWORD=funcp --tmpfs /var/lib/mysql/:rw,noexec,nosuid ${IMAGE_MYSQL} >/dev/null
+                      waitFor mysql-ac-${SUFFIX} 3306
+                      CONTAINERPARAMS="-e typo3DatabaseName=func_test -e typo3DatabaseUsername=root -e typo3DatabasePassword=funcp -e typo3DatabaseHost=mysql-ac-${SUFFIX}"
+                      ${CONTAINER_BIN} run ${CONTAINER_COMMON_PARAMS} --name ac-mysql ${XDEBUG_MODE} -e XDEBUG_CONFIG="${XDEBUG_CONFIG}" ${CONTAINERPARAMS} ${IMAGE_PHP} "${COMMAND[@]}"
+                      SUITE_EXIT_CODE=$?
+                      ;;
+                  postgres)
+                      ${CONTAINER_BIN} run --rm ${CI_PARAMS} --name postgres-ac-${SUFFIX} --network ${NETWORK} -d -e POSTGRES_PASSWORD=funcp -e POSTGRES_USER=funcu --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid ${IMAGE_POSTGRES} >/dev/null
+                      waitFor postgres-ac-${SUFFIX} 5432
+                      CONTAINERPARAMS="-e typo3DatabaseDriver=pdo_pgsql -e typo3DatabaseName=func_test -e typo3DatabaseUsername=funcu -e typo3DatabasePassword=funcp -e typo3DatabaseHost=postgres-ac-${SUFFIX}"
+                      ${CONTAINER_BIN} run ${CONTAINER_COMMON_PARAMS} --name ac-postgres ${XDEBUG_MODE} -e XDEBUG_CONFIG="${XDEBUG_CONFIG}" ${CONTAINERPARAMS} ${IMAGE_PHP} "${COMMAND[@]}"
+                      SUITE_EXIT_CODE=$?
+                      ;;
+                  sqlite)
+                      rm -rf "${WEB_DIR}/typo3temp/var/tests/acceptance-sqlite-dbs/"
+                      mkdir -p "${WEB_DIR}/typo3temp/var/tests/acceptance-sqlite-dbs/"
+                      CONTAINERPARAMS="-e typo3DatabaseDriver=pdo_sqlite"
+                      echo "${COMMAND[@]}"
+                      ${CONTAINER_BIN} run ${CONTAINER_COMMON_PARAMS} --name ac-sqlite ${XDEBUG_MODE} -e XDEBUG_CONFIG="${XDEBUG_CONFIG}" ${CONTAINERPARAMS} ${IMAGE_PHP} "${COMMAND[@]}"
+                      SUITE_EXIT_CODE=$?
+                      ;;
+              esac
+              ;;
     functional)
         COMMAND=(.Build/bin/phpunit -c Build/phpunit/FunctionalTests.xml --exclude-group not-${DBMS} ${EXTRA_TEST_OPTIONS} "$@")
         case ${DBMS} in

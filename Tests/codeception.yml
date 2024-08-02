@@ -4,7 +4,6 @@ paths:
   data: .
   log: ../.Build/Web/typo3temp/var/tests/AcceptanceReports
   support: Acceptance/Support
-  envs: ../Tests/Acceptance/_envs
   output: ../.Build/Web/typo3temp/var/tests/_output
 settings:
   colors: true
@@ -12,3 +11,20 @@ settings:
 extensions:
   enabled:
     - Codeception\Extension\Recorder
+modules:
+  enabled:
+    - Asserts
+    - WebDriver
+    - \TYPO3\TestingFramework\Core\Acceptance\Helper\Acceptance
+  config:
+    WebDriver:
+      browser: chrome
+      url: http://web:80
+      host: chrome
+      port: 4444
+      path: /wd/hub
+      wait: 2
+      window_size: 1280x1024
+      capabilities:
+        goog:chromeOptions:
+          args: [ "headless", "no-sandbox", "disable-gpu", "window-size=1280,1024" ]
