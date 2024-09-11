@@ -17,6 +17,7 @@ use B13\Container\Domain\Factory\Exception;
 use B13\Container\Domain\Service\ContainerService;
 use B13\Container\Tca\Registry;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
+use TYPO3\CMS\Core\Utility\MathUtility;
 
 class DatamapBeforeStartHook
 {
@@ -56,6 +57,49 @@ class DatamapBeforeStartHook
     {
         $dataHandler->datamap = $this->datamapForChildLocalizations($dataHandler->datamap);
         $dataHandler->datamap = $this->datamapForChildrenChangeContainerLanguage($dataHandler->datamap);
+        $dataHandler->datamap = $this->denyChangingOfLanguageFieldsForContainerChildren($dataHandler->datamap, $dataHandler);
+    }
+
+    protected function denyChangingOfLanguageFieldsForContainerChildren(array $datamap, DataHandler $dataHandler):array
+    {
+        foreach ($datamap['tt_content'] ?? [] as $uid => &$datas) {
+            if (!MathUtility::canBeInterpretedAsInteger($uid)) {
+                continue;
+            }
+            if (!isset($datas['sys_language_uid']) && !isset($datas['l18n_parent'])) {
+                continue;
+            }
+            $record = $this->database->fetchOneRecord((int)$uid);
+            if ($record === null || (int)($record['tx_container_parent'] ?? 0) === 0) {
+                continue;
+            }
+            if (isset($datas['sys_language_uid'])) {
+                $dataHandler->log(
+                    'tt_content',
+                    $uid,
+                    2,
+                    0,
+                    1,
+                    'cannot change language of container child record',
+                    28
+                );
+                unset($datas['sys_language_uid']);
+            }
+            if (isset($datas['l18n_parent'])) {
+                unset($datas['l18n_parent']);
+                $dataHandler->log(
+                    'tt_content',
+                    $uid,
+                    2,
+                    0,
+                    1,
+                    'cannot change parent of container child record',
+                    28
+                );
+            }
+            $datamap['tt_content'][$uid] = $datas;
+        }
+        return $datamap;
     }
 
     protected function datamapForChildLocalizations(array $datamap): array
