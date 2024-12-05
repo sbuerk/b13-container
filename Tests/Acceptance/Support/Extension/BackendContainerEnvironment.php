@@ -16,6 +16,7 @@ use Codeception\Event\SuiteEvent;
 use TYPO3\CMS\Core\Information\Typo3Version;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Acceptance\Extension\BackendEnvironment;
+use TYPO3\TestingFramework\Core\Testbase;
 
 class BackendContainerEnvironment extends BackendEnvironment
 {
@@ -86,14 +87,38 @@ class BackendContainerEnvironment extends BackendEnvironment
         if ($typo3Version->getMajorVersion() < 13) {
             return;
         }
-        $content = "<?php
-
-call_user_func(static function () {
-    \$classLoader = require __DIR__ . '/../../../../../..' . '/vendor/autoload.php';
-    \TYPO3\TestingFramework\Core\SystemEnvironmentBuilder::run(1, \TYPO3\CMS\Core\Core\SystemEnvironmentBuilder::REQUESTTYPE_BE);
-    \TYPO3\CMS\Core\Core\Bootstrap::init(\$classLoader)->get(\TYPO3\CMS\Backend\Http\Application::class)->run();
-});";
-        $instancePath = ORIGINAL_ROOT . 'typo3temp/var/tests/acceptance';
-        file_put_contents($instancePath . '/typo3/index.php', $content);
+        $testbase = new Testbase();
+        $copyFiles = [
+            // Create favicon.ico to suppress potential javascript errors in console
+            // which are caused by calling a non html in the browser, e.g. seo sitemap xml
+            'typo3/sysext/backend/Resources/Public/Icons/favicon.ico' => [
+                'favicon.ico',
+            ],
+            // Provide some files into the test instance normally added by installer
+            'typo3/sysext/install/Resources/Private/FolderStructureTemplateFiles/root-htaccess' => [
+                '.htaccess',
+            ],
+            'typo3/sysext/install/Resources/Private/FolderStructureTemplateFiles/resources-root-htaccess' => [
+                'fileadmin/.htaccess',
+            ],
+            'typo3/sysext/install/Resources/Private/FolderStructureTemplateFiles/fileadmin-temp-htaccess' => [
+                'fileadmin/_temp_/.htaccess',
+            ],
+            'typo3/sysext/install/Resources/Private/FolderStructureTemplateFiles/fileadmin-temp-index.html' => [
+                'fileadmin/_temp_/index.html',
+            ],
+            'typo3/sysext/install/Resources/Private/FolderStructureTemplateFiles/typo3temp-var-htaccess' => [
+                'typo3temp/var/.htaccess',
+            ],
+        ];
+        foreach ($copyFiles as $sourceFile => $targetFiles) {
+            foreach ($targetFiles as $targetFile) {
+                $testbase->createDirectory(dirname(ltrim($targetFile, '/')));
+                copy(
+                    from: ltrim($sourceFile, '/'),
+                    to: ltrim($targetFile, '/'),
+                );
+            }
+        }
     }
 }
